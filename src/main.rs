@@ -61,7 +61,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 |file_name| -> Result<(String, String), Box<dyn std::error::Error>> {
                     let path = format!("./prompts/{}", file_name);
                     let content = std::fs::read_to_string(path)?;
-                    Ok((file_name, content))
+                    let prompt_name = file_name.strip_suffix(".txt").unwrap_or(&file_name);
+                    Ok((prompt_name.to_string(), content))
                 },
             )
     }) else {
