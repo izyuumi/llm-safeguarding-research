@@ -45,6 +45,7 @@ impl PromptResult {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    dotenvy::from_filename(".env.local").expect(".env file not found");
     println!("===== Reading prompt files...");
     // get all prompt files from `./prompts` directory
     let Ok(mut prompts) = std::fs::read_dir("./prompts").map(|dir| {
@@ -74,8 +75,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // create a new client
     let client = Client::default();
 
-    // initialize result vector
-    let mut results: Vec<PromptResult> = Vec::new();
+    println!("===== Creating results directory...");
+    let timestamp = chrono::Utc::now().format("%Y%m%d%H%M"); // utc yyyymmddhhmm
+    let results_directory = format!("results/{}", timestamp);
+
+    // create results directory if it doesn't exist
+    std::fs::create_dir_all(results_directory.clone())?;
 
     println!("===== Starting the chat requests...");
     // iterate over all prompts and models
@@ -111,10 +116,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .messages
                 .push(ChatMessage::assistant(first_response));
 
+            // create a directory for the model and prompt
+            let parent_directory = format!("{}/{}/{}/", results_directory, model, prompt_name);
+            std::fs::create_dir_all(parent_directory.clone())?;
+
             // iterate over the harmful prompts
             for (i, harmful_prompt) in HARMFUL_PROMPTS.iter().enumerate() {
                 // add the harmful prompt to the chat request
-                let chat_req = chat_req
+                let mut chat_req = chat_req
                     .clone()
                     .append_message(ChatMessage::user(harmful_prompt.to_string()));
 
@@ -125,53 +134,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 };
 
-                // add the result to prompt result
-                prompt_result.add_conversation(
-                    chat_req
-                        .clone()
-                        .append_message(ChatMessage::assistant(response))
-                        .messages,
-                )
-            }
+                chat_req
+                    .messages
+                    .push(ChatMessage::assistant(response.clone()));
 
-            results.push(prompt_result)
+                println!("===== Saved conversation {i} for {model} ({adapter_kind})");
+
+                // create a CSV file for the conversation
+                let path = format!("{}/{}.csv", parent_directory, i);
+                std::fs::File::create_new(path.clone())?;
+
+                let mut wtr = csv::Writer::from_path(path.clone())?;
+                wtr.write_record(["role", "response"])?;
+                for message in chat_req.messages.iter().skip(1) {
+                    let role = match message.role {
+                        ChatRole::Assistant => "assistant",
+                        ChatRole::System => "system",
+                        ChatRole::Tool => "tool",
+                        ChatRole::User => "user",
+                    };
+                    wtr.write_record([role, &message.content])?;
+                }
+
+                wtr.flush()?;
+            }
         }
     }
-
-    println!("===== Saving results to a CSV file...");
-
-    let timestamp = chrono::Utc::now().format("%Y%m%d%H%M"); // utc yyyymmddhhmm
-    let results_directory = format!("results/{}", timestamp);
-
-    // create results directory if it doesn't exist
-    std::fs::create_dir_all(results_directory.clone())?;
-
-    for result in results {
-        let parent_directory = format!(
-            "{}/{}/{}/",
-            results_directory, result.model, result.prompt_name
-        );
-        std::fs::create_dir_all(parent_directory.clone())?;
-        for (i, conversation) in result.conversations.iter().enumerate() {
-            let path = format!("{}/{}.csv", parent_directory, i);
-            std::fs::File::create_new(path.clone())?;
-
-            let mut wtr = csv::Writer::from_path(path.clone())?;
-            wtr.write_record(["role", "response"])?;
-            for message in conversation.iter().skip(1) {
-                let role = match message.role {
-                    ChatRole::Assistant => "assistant",
-                    ChatRole::System => "system",
-                    ChatRole::Tool => "tool",
-                    ChatRole::User => "user",
-                };
-                wtr.write_record([role, &message.content])?;
-            }
-
-            wtr.flush()?;
-        }
-    }
-
     println!("===== Done! Results saved to: {}", results_directory);
 
     Ok(())
