@@ -608,6 +608,7 @@ dependencies = [
  "chrono",
  "csv",
  "dotenvy",
+ "futures",
  "genai",
  "tokio",
 ]
